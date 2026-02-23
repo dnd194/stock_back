@@ -1,0 +1,75 @@
+# ================================
+# 🔐 환경 변수 / 시크릿 (절대 커밋 금지)
+# ================================
+.env
+.env.*
+!.env.example
+
+# ================================
+# 📦 의존성 / 빌드 결과
+# ================================
+/node_modules
+/dist
+/build
+*.tsbuildinfo
+
+# ================================
+# 📝 로그
+# ================================
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ================================
+# 🧪 테스트 / 커버리지
+# ================================
+/coverage
+/.nyc_output
+
+# ================================
+# 💻 OS
+# ================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ================================
+# 🛠 IDE / 에디터
+# ================================
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+/.cursor
+
+# VSCode (설정만 선택적으로 공유 가능)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ================================
+# 🗂 임시 / 런타임
+# ================================
+.temp
+.tmp
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Node diagnostic reports
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Optional: 로컬만 쓰는 설정
+*.local
