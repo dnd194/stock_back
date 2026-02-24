@@ -25,7 +25,7 @@ export class KisService {
   }
 
   /**
-   * KIS 액세스 토큰 반환. 캐시 있으면 반환, 없거나 forceRefresh 시 새로 발급.
+   * KIS 액세스 토큰 반환. 캐시 있으면 반환, 없거나 forceRefresh 시 새로 발급
    * @param forceRefresh true면 캐시 무시하고 Redis 토큰 삭제 후 새 토큰 발급
    */
   async getAccessToken(forceRefresh = false): Promise<string> {

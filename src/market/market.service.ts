@@ -101,12 +101,12 @@ export class MarketService {
             custtype: 'P',
           },
           params: {
-            FID_COND_MRKT_DIV_CODE: 'V', // V(Default)
+            FID_COND_MRKT_DIV_CODE: 'V',    // V(Default)
             FID_COND_SCR_DIV_CODE: '16449', // 16449(Default)
-            FID_INPUT_ISCD: '0000', // 0000:전체, 0001:코스피, 1001:코스닥
-            FID_DIV_CLS_CODE: '1', // 0: 수량정열, 1: 금액정열
-            FID_RANK_SORT_CLS_CODE: '0', // 0: 순매수상위, 1: 순매도상위
-            FID_ETC_CLS_CODE: '0', // 0:전체 1:외국인 2:기관계 3:기타
+            FID_INPUT_ISCD: '0000',          // Default: 0000:전체, 0001:코스피, 1001:코스닥
+            FID_DIV_CLS_CODE: '1',           // Default: 0: 수량정열, 1: 금액정열
+            FID_RANK_SORT_CLS_CODE: '0',     // Default: 0: 순매수상위, 1: 순매도상위
+            FID_ETC_CLS_CODE: '0',           // Default: 0:전체 1:외국인 2:기관계 3:기타
           },
         },
       );
