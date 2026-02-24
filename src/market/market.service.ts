@@ -85,17 +85,16 @@ export class MarketService {
       };
     }
 
-    // 5. Redis에 없으면 API 호출
+    // 5. Redis에 없으면 API 호출 (400 시 토큰 갱신 후 1회 재시도)
     this.logger.log(`API 호출 시작 (슬롯: ${lastUpdateSlot})`);
-    try {
-      const token = await this.kisService.getAccessToken();
-      const baseUrl = kisConfig.baseUrl ?? 'https://openapi.koreainvestment.com:9443';
-      const response = await axios.get<{ output?: InvestorStock[]; [key: string]: unknown }>(
+    const baseUrl = kisConfig.baseUrl ?? 'https://openapi.koreainvestment.com:9443';
+    const doRequest = async (accessToken: string) =>
+      axios.get<{ output?: InvestorStock[]; [key: string]: unknown }>(
         `${baseUrl}/uapi/domestic-stock/v1/quotations/foreign-institution-total`,
         {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
-            authorization: `Bearer ${token}`,
+            authorization: `Bearer ${accessToken}`,
             appkey: kisConfig.appKey,
             appsecret: kisConfig.appSecret,
             tr_id: 'FHPTJ04400000',
@@ -111,6 +110,22 @@ export class MarketService {
           },
         },
       );
+
+    try {
+      let token = await this.kisService.getAccessToken();
+      let response: Awaited<ReturnType<typeof doRequest>>;
+      try {
+        response = await doRequest(token);
+      } catch (firstError) {
+        if (axios.isAxiosError(firstError) && firstError.response?.status === 400) {
+          this.logger.warn('KIS API 500 (status : 400) - 캐시 토큰 만료, Redis 삭제 후 새 토큰으로 재시도');
+          await this.kisService.clearCachedToken();
+          token = await this.kisService.getAccessToken(true);
+          response = await doRequest(token);
+        } else {
+          throw firstError;
+        }
+      }
 
       const apiData = response.data;
       if (!apiData || typeof apiData !== 'object') {
@@ -135,6 +150,10 @@ export class MarketService {
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
         const msg = error.response?.data?.msg1 ?? error.message;
+        if (status === 401) {
+          this.logger.warn('KIS API 401 - Redis 토큰 삭제 (재시도 후에도 실패)');
+          await this.kisService.clearCachedToken();
+        }
         this.logger.error(`KIS 시장 데이터 조회 실패 (${status ?? 'network'}): ${msg}`);
         throw new BadRequestException(`KIS 시장 데이터 조회 실패 (${status ?? 'network'}): ${msg}`);
       }

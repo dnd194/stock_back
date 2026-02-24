@@ -3,6 +3,8 @@ import Redis from 'ioredis';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 
+export const KIS_ACCESS_TOKEN_KEY = 'KIS:ACCESS_TOKEN';
+
 @Injectable()
 export class KisService {
   private readonly logger = new Logger(KisService.name);
@@ -12,22 +14,40 @@ export class KisService {
     private readonly configService: ConfigService,
   ) {}
 
-  async getAccessToken(): Promise<string> {
-    this.logger.log('getAccessToken() 호출');
+  /** Redis에 저장된 KIS 토큰을 삭제한다. 만료/400 시 새 토큰 발급 전에 호출 */
+  async clearCachedToken(): Promise<void> {
+    try {
+      await this.redis.del(KIS_ACCESS_TOKEN_KEY);
+      this.logger.log('Redis 캐시 토큰 삭제 완료');
+    } catch (error) {
+      this.logger.warn('Redis 토큰 삭제 실패', error);
+    }
+  }
+
+  /**
+   * KIS 액세스 토큰 반환. 캐시 있으면 반환, 없거나 forceRefresh 시 새로 발급.
+   * @param forceRefresh true면 캐시 무시하고 Redis 토큰 삭제 후 새 토큰 발급
+   */
+  async getAccessToken(forceRefresh = false): Promise<string> {
+    this.logger.log(`getAccessToken() 호출 (forceRefresh: ${forceRefresh})`);
     const kisConfig = this.configService.get('kis');
     if (!kisConfig?.appKey || !kisConfig?.appSecret) {
       throw new Error('KIS 설정이 없습니다. KIS_APP_KEY, KIS_APP_SECRET을 확인하세요.');
     }
 
+    if (forceRefresh) {
+      await this.clearCachedToken();
+    }
+
     // 1️⃣ Redis에서 토큰 확인
     let cachedToken: string | null = null;
     try {
-      cachedToken = await this.redis.get('KIS:ACCESS_TOKEN');
+      cachedToken = await this.redis.get(KIS_ACCESS_TOKEN_KEY);
     } catch (error) {
       this.logger.warn('Redis 토큰 조회 실패, 새 토큰 발급 시도', error);
     }
 
-    if (cachedToken) {
+    if (cachedToken && !forceRefresh) {
       this.logger.log('✅ Redis 캐시 토큰 사용');
       return cachedToken;
     }
@@ -56,7 +76,7 @@ export class KisService {
       // 3️⃣ Redis 저장 (만료 1분 전까지)
       const ttl = Math.max(60, expiresIn - 60);
       try {
-        await this.redis.set('KIS:ACCESS_TOKEN', accessToken, 'EX', ttl);
+        await this.redis.set(KIS_ACCESS_TOKEN_KEY, accessToken, 'EX', ttl);
         this.logger.log(`✅ 토큰 Redis 저장 완료 (TTL: ${ttl}초)`);
       } catch (error) {
         this.logger.warn('Redis 토큰 저장 실패 (토큰은 반환됨)', error);
