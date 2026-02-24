@@ -162,24 +162,34 @@ export class MarketService {
     }
   }
 
+  /**
+   * 쌍끌이: 외국인+기관 순매수 종목 정제.
+   * 09:30 슬롯(기관 첫 집계 전)은 기관 데이터가 0이므로 외국인 순매수만 있어도 포함.
+   * 10:00 이후 슬롯은 외국인·기관 모두 순매수인 종목만 포함.
+   */
   getSsangkkeuli(data: InvestorStock[]) {
+    const hasInstitutionData = data.some(
+      (stock) => Number(stock.orgn_ntby_qty) !== 0,
+    );
+    const filterFn = hasInstitutionData
+      ? (stock: InvestorStock) =>
+          Number(stock.frgn_ntby_qty) > 0 && Number(stock.orgn_ntby_qty) > 0
+      : (stock: InvestorStock) => Number(stock.frgn_ntby_qty) > 0;
+
     return data
-      .filter(
-        (stock) =>
-          Number(stock.frgn_ntby_qty) > 0 && Number(stock.orgn_ntby_qty) > 0,
-      )
+      .filter(filterFn)
       .map((stock) => ({
         name: stock.hts_kor_isnm,
         code: stock.mksc_shrn_iscd,
-        foreignQty: Number(stock.frgn_ntby_qty), // 외국인 순매수량
-        institutionQty: Number(stock.orgn_ntby_qty), // 기관 순매수량
-        foreignAmount: Number(stock.frgn_ntby_tr_pbmn), // 외국인 순매수금액  (단위: 백만원, 수량 * 현재가)
-        institutionAmount: Number(stock.orgn_ntby_tr_pbmn), // 기관 순매수금액  (단위: 백만원, 수량 * 현재가)
-        fundAmount: Number(stock.fund_ntby_tr_pbmn), // 기금 순매수금액  (단위: 백만원, 수량 * 현재가)
+        foreignQty: Number(stock.frgn_ntby_qty),
+        institutionQty: Number(stock.orgn_ntby_qty),
+        foreignAmount: Number(stock.frgn_ntby_tr_pbmn),
+        institutionAmount: Number(stock.orgn_ntby_tr_pbmn),
+        fundAmount: Number(stock.fund_ntby_tr_pbmn),
         totalAmount:
           Number(stock.frgn_ntby_tr_pbmn) + Number(stock.orgn_ntby_tr_pbmn),
       }))
-      .sort((a, b) => b.totalAmount - a.totalAmount) // 금액 기준 내림차순
-      .slice(0, 10); // 상위 10개
+      .sort((a, b) => b.totalAmount - a.totalAmount)
+      .slice(0, 10);
   }
 }
