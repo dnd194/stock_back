@@ -1,4 +1,4 @@
-import { Module, Global, Logger } from '@nestjs/common';
+import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { RedisHealthController } from './redis-health.controller';
@@ -11,11 +11,12 @@ import { RedisHealthController } from './redis-health.controller';
       provide: 'REDIS_CLIENT',
       useFactory: (configService: ConfigService) => {
         const logger = new Logger('RedisModule');
-        const redisConfig = configService.get('redis');
+        const config = configService.get<{ url?: string; host?: string; port?: number; password?: string; tls?: boolean }>('redis');
+
         const options: import('ioredis').RedisOptions = {
           retryStrategy: (times) => {
             const delay = Math.min(times * 50, 2000);
-            logger.warn(`Redis 연결 재시도 (${times}회), ${delay}ms 후 재시도`);
+            logger.warn(`Redis 재시도 ${times}회, ${delay}ms 후`);
             return delay;
           },
           maxRetriesPerRequest: 3,
@@ -23,32 +24,25 @@ import { RedisHealthController } from './redis-health.controller';
           lazyConnect: false,
         };
 
-        const redis = redisConfig?.url
-          ? new Redis(redisConfig.url, options)
+        const redis = config?.url
+          ? new Redis(config.url, options)
           : new Redis({
               ...options,
-              host: redisConfig?.host ?? 'localhost',
-              port: redisConfig?.port ?? 6379,
-              password: redisConfig?.password,
-              ...(redisConfig?.tls ? { tls: {} } : {}),
+              host: config?.host ?? 'localhost',
+              port: config?.port ?? 6379,
+              password: config?.password,
+              ...(config?.tls ? { tls: {} } : {}),
             });
 
         redis.on('connect', () => {
-          const desc = redisConfig?.url ? redisConfig.url.replace(/:[^:@]+@/, ':****@') : `${redisConfig?.host}:${redisConfig?.port}`;
-          logger.log(`Redis 연결 성공: ${desc}`);
+          const desc = config?.url
+            ? config.url.replace(/:[^:@]+@/, ':****@')
+            : `${config?.host ?? 'localhost'}:${config?.port ?? 6379}`;
+          logger.log(`Redis 연결: ${desc}`);
         });
-
-        redis.on('error', (error) => {
-          logger.error('Redis 연결 오류', error);
-        });
-
-        redis.on('close', () => {
-          logger.warn('Redis 연결 종료');
-        });
-
-        redis.on('reconnecting', () => {
-          logger.log('Redis 재연결 시도 중...');
-        });
+        redis.on('error', (err) => logger.error('Redis 오류', err));
+        redis.on('close', () => logger.warn('Redis 연결 종료'));
+        redis.on('reconnecting', () => logger.log('Redis 재연결 중'));
 
         return redis;
       },

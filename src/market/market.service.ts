@@ -1,16 +1,32 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import dayjs from 'dayjs';
+import { Redis } from 'ioredis';
+import {
+  MARKET_CLOSE_TIME,
+  MARKET_SUPPLY_REDIS_KEY,
+  MARKET_SUPPLY_SLOTS,
+  getTTLUntilNext0759,
+} from '../config/market.config';
 import { KisService } from '../kis/kis.service';
 import { InvestorStock } from './market.types';
-import { Redis } from 'ioredis';
-import dayjs from 'dayjs';
-import { ConfigService } from '@nestjs/config';
-import {
-  MARKET_SUPPLY_SLOTS,
-  MARKET_SUPPLY_REDIS_KEY,
-  MARKET_SUPPLY_TTL_SECONDS,
-  MARKET_CLOSE_TIME,
-} from '../config/market.config';
+
+const KIS_API_PATH = '/uapi/domestic-stock/v1/quotations/foreign-institution-total';
+
+const KIS_FOREIGN_INSTITUTION_PARAMS = {
+  FID_COND_MRKT_DIV_CODE: 'V',
+  FID_COND_SCR_DIV_CODE: '16449',
+  FID_INPUT_ISCD: '0000',
+  FID_DIV_CLS_CODE: '1',
+  FID_RANK_SORT_CLS_CODE: '0',
+  FID_ETC_CLS_CODE: '0',
+} as const;
 
 @Injectable()
 export class MarketService {
@@ -27,122 +43,127 @@ export class MarketService {
 
     const kisConfig = this.configService.get('kis');
     if (!kisConfig?.appKey || !kisConfig?.appSecret) {
-      throw new BadRequestException('KIS 설정이 없습니다. KIS_APP_KEY, KIS_APP_SECRET을 확인하세요.');
+      throw new BadRequestException(
+        'KIS 설정이 없습니다. KIS_APP_KEY, KIS_APP_SECRET을 확인하세요.',
+      );
     }
 
     const now = dayjs();
     const dateStr = now.format('YYYYMMDD');
     const currentTime = now.format('HH:mm');
+    const lastUpdateSlot = MARKET_SUPPLY_SLOTS.filter(
+      (time) => currentTime >= time,
+    ).pop();
 
-    // 1. 전체('0') 데이터를 위한 통합 시간표
-    // 외국인이 09:30에 먼저 나오고, 기관이 10:00에 합류하므로 두 시점 모두 슬롯으로 잡습니다.
-
-    // 2. 현재 시간 기준으로 유효한 '최신 슬롯' 찾기
-    const lastUpdateSlot = MARKET_SUPPLY_SLOTS.filter((time) => currentTime >= time).pop();
-
-    // 아직 첫 공시(09:30) 전이라면 전날 마지막 집계 데이터 조회
+    // 첫 공시(08:00) 전 → 전날 마지막 집계 조회
     if (!lastUpdateSlot) {
-      const yesterday = now.subtract(1, 'day');
-      const yesterdayDateStr = yesterday.format('YYYYMMDD');
-      const lastSlotOfYesterday = MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1]; // 마지막 슬롯 (14:30)
-      const yesterdayCacheKey = MARKET_SUPPLY_REDIS_KEY(yesterdayDateStr, lastSlotOfYesterday);
-      let yesterdayCached: string | null = null;
-      try {
-        yesterdayCached = await this.redis.get(yesterdayCacheKey);
-      } catch (error) {
-        this.logger.warn('전날 데이터 Redis 조회 실패', error);
-      }
-
-      if (yesterdayCached) {
-        this.logger.log(`✅ 전날 마지막 집계 데이터 사용: ${yesterdayCacheKey}`);
-        return JSON.parse(yesterdayCached);
-      }
-
-      this.logger.warn('장 시작 전이고 전날 데이터도 없음');
-      return { message: '장 시작 전이거나 아직 첫 집계 전입니다. 전날 데이터도 없습니다.' };
+      return this.resolveBeforeFirstSlot(now);
     }
 
-    // 3. Redis 키 확인 (예: supply:total:20260220:11:20)
+    // 당일 슬롯 캐시 조회
     const cacheKey = MARKET_SUPPLY_REDIS_KEY(dateStr, lastUpdateSlot);
-    let cached: string | null = null;
-    try {
-      cached = await this.redis.get(cacheKey);
-    } catch (error) {
-      this.logger.warn(`Redis 캐시 조회 실패: ${cacheKey}`, error);
-    }
-
+    const cached = await this.getCached(cacheKey);
     if (cached) {
-      this.logger.log(`✅ Redis 슬롯 ${cacheKey} 사용`);
+      this.logger.log(`Redis 캐시 사용: ${cacheKey}`);
       return JSON.parse(cached);
     }
 
-    // 4. 장 마감 후에는 API 호출하지 않고 캐시만 사용 (당일 마지막 집계만 표시)
+    // 장 마감 후 → API 호출 없이 캐시만 사용
     if (currentTime > MARKET_CLOSE_TIME) {
-      this.logger.log('장 마감 후 - API 호출하지 않음');
+      this.logger.log('장 마감 후 - API 미호출');
       return {
         message:
           '장 마감 후입니다. 당일 마지막 집계 데이터가 캐시에 없습니다.',
       };
     }
 
-    // 5. Redis에 없으면 API 호출 (400 시 토큰 갱신 후 1회 재시도)
-    this.logger.log(`API 호출 시작 (슬롯: ${lastUpdateSlot})`);
-    const baseUrl = kisConfig.baseUrl ?? 'https://openapi.koreainvestment.com:9443';
-    const doRequest = async (accessToken: string) =>
-      axios.get<{ output?: InvestorStock[]; [key: string]: unknown }>(
-        `${baseUrl}/uapi/domestic-stock/v1/quotations/foreign-institution-total`,
-        {
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            authorization: `Bearer ${accessToken}`,
-            appkey: kisConfig.appKey,
-            appsecret: kisConfig.appSecret,
-            tr_id: 'FHPTJ04400000',
-            custtype: 'P',
-          },
-          params: {
-            FID_COND_MRKT_DIV_CODE: 'V',    // V(Default)
-            FID_COND_SCR_DIV_CODE: '16449', // 16449(Default)
-            FID_INPUT_ISCD: '0000',          // Default: 0000:전체, 0001:코스피, 1001:코스닥
-            FID_DIV_CLS_CODE: '1',           // Default: 0: 수량정열, 1: 금액정열
-            FID_RANK_SORT_CLS_CODE: '0',     // Default: 0: 순매수상위, 1: 순매도상위
-            FID_ETC_CLS_CODE: '0',           // Default: 0:전체 1:외국인 2:기관계 3:기타
-          },
+    // API 호출 (400 시 토큰 갱신 후 1회 재시도)
+    return this.fetchAndCacheSupplyData(kisConfig, now, cacheKey, lastUpdateSlot);
+  }
+
+  private async resolveBeforeFirstSlot(now: dayjs.Dayjs) {
+    const yesterday = now.subtract(1, 'day');
+    const yesterdayStr = yesterday.format('YYYYMMDD');
+    const lastSlot = MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1];
+    const key = MARKET_SUPPLY_REDIS_KEY(yesterdayStr, lastSlot);
+
+    const cached = await this.getCached(key);
+    if (cached) {
+      this.logger.log(`전날 마지막 집계 사용: ${key}`);
+      return JSON.parse(cached);
+    }
+
+    this.logger.warn('장 시작 전이고 전날 데이터 없음');
+    return {
+      message: '장 시작 전이거나 아직 첫 집계 전입니다. 전날 데이터도 없습니다.',
+    };
+  }
+
+  private async getCached(key: string): Promise<string | null> {
+    try {
+      return await this.redis.get(key);
+    } catch (error) {
+      this.logger.warn(`Redis 조회 실패: ${key}`, error);
+      return null;
+    }
+  }
+
+  private async fetchAndCacheSupplyData(
+    kisConfig: { appKey: string; appSecret: string; baseUrl?: string },
+    now: dayjs.Dayjs,
+    cacheKey: string,
+    slot: string,
+  ) {
+    this.logger.log(`API 호출 (슬롯: ${slot})`);
+
+    const baseUrl =
+      kisConfig.baseUrl ?? 'https://openapi.koreainvestment.com:9443';
+    const url = `${baseUrl}${KIS_API_PATH}`;
+
+    const doRequest = (token: string) =>
+      axios.get<{ output?: InvestorStock[]; [key: string]: unknown }>(url, {
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          authorization: `Bearer ${token}`,
+          appkey: kisConfig.appKey,
+          appsecret: kisConfig.appSecret,
+          tr_id: 'FHPTJ04400000',
+          custtype: 'P',
         },
-      );
+        params: KIS_FOREIGN_INSTITUTION_PARAMS,
+      });
 
     try {
       let token = await this.kisService.getAccessToken();
       let response: Awaited<ReturnType<typeof doRequest>>;
+
       try {
         response = await doRequest(token);
       } catch (firstError) {
-        if (axios.isAxiosError(firstError) && firstError.response?.status === 400) {
-          this.logger.warn('KIS API 500 (status : 400) - 캐시 토큰 만료, Redis 삭제 후 새 토큰으로 재시도');
-          await this.kisService.clearCachedToken();
-          token = await this.kisService.getAccessToken(true);
-          response = await doRequest(token);
-        } else {
-          throw firstError;
-        }
+        const is400 =
+          axios.isAxiosError(firstError) &&
+          firstError.response?.status === 400;
+        if (!is400) throw firstError;
+
+        this.logger.warn('KIS 400 - 토큰 갱신 후 재시도');
+        await this.kisService.clearCachedToken();
+        token = await this.kisService.getAccessToken(true);
+        response = await doRequest(token);
       }
 
       const apiData = response.data;
       if (!apiData || typeof apiData !== 'object') {
-        throw new BadRequestException('KIS 시장 데이터 응답 형식이 올바르지 않습니다.');
+        throw new BadRequestException(
+          'KIS 시장 데이터 응답 형식이 올바르지 않습니다.',
+        );
       }
 
-      // 6. 성공 시 Redis에 저장
+      const ttl = getTTLUntilNext0759(now);
       try {
-        await this.redis.set(
-          cacheKey,
-          JSON.stringify(apiData),
-          'EX',
-          MARKET_SUPPLY_TTL_SECONDS,
-        );
-        this.logger.log(`✅ 데이터 Redis 저장 완료: ${cacheKey}`);
+        await this.redis.set(cacheKey, JSON.stringify(apiData), 'EX', ttl);
+        this.logger.log(`Redis 저장: ${cacheKey} (TTL: ${ttl}s)`);
       } catch (error) {
-        this.logger.warn('Redis 데이터 저장 실패 (데이터는 반환됨)', error);
+        this.logger.warn('Redis 저장 실패 (데이터는 반환)', error);
       }
 
       return apiData;
@@ -150,44 +171,44 @@ export class MarketService {
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
         const msg = error.response?.data?.msg1 ?? error.message;
-        if (status === 401) {
-          this.logger.warn('KIS API 401 - Redis 토큰 삭제 (재시도 후에도 실패)');
+        if (status === 400) {
           await this.kisService.clearCachedToken();
         }
         this.logger.error(`KIS 시장 데이터 조회 실패 (${status ?? 'network'}): ${msg}`);
-        throw new BadRequestException(`KIS 시장 데이터 조회 실패 (${status ?? 'network'}): ${msg}`);
+        throw new BadRequestException(
+          `KIS 시장 데이터 조회 실패 (${status ?? 'network'}): ${msg}`,
+        );
       }
-      this.logger.error('시장 데이터 조회 중 예상치 못한 오류', error);
+      this.logger.error('시장 데이터 조회 중 오류', error);
       throw error;
     }
   }
 
   /**
-   * 쌍끌이: 외국인+기관 순매수 종목 정제.
-   * 09:30 슬롯(기관 첫 집계 전)은 기관 데이터가 0이므로 외국인 순매수만 있어도 포함.
-   * 10:00 이후 슬롯은 외국인·기관 모두 순매수인 종목만 포함.
+   * 쌍끌이: 외국인·기관 순매수 종목 정제.
+   * 09:30(기관 미집계)은 외국인 순매수만 있어도 포함, 10:00 이후는 둘 다 순매수만.
    */
   getSsangkkeuli(data: InvestorStock[]) {
-    const hasInstitutionData = data.some(
-      (stock) => Number(stock.orgn_ntby_qty) !== 0,
+    const hasInstitution = data.some(
+      (s) => Number(s.orgn_ntby_qty) !== 0,
     );
-    const filterFn = hasInstitutionData
-      ? (stock: InvestorStock) =>
-          Number(stock.frgn_ntby_qty) > 0 && Number(stock.orgn_ntby_qty) > 0
-      : (stock: InvestorStock) => Number(stock.frgn_ntby_qty) > 0;
+    const includeStock = hasInstitution
+      ? (s: InvestorStock) =>
+          Number(s.frgn_ntby_qty) > 0 && Number(s.orgn_ntby_qty) > 0
+      : (s: InvestorStock) => Number(s.frgn_ntby_qty) > 0;
 
     return data
-      .filter(filterFn)
-      .map((stock) => ({
-        name: stock.hts_kor_isnm,
-        code: stock.mksc_shrn_iscd,
-        foreignQty: Number(stock.frgn_ntby_qty),
-        institutionQty: Number(stock.orgn_ntby_qty),
-        foreignAmount: Number(stock.frgn_ntby_tr_pbmn),
-        institutionAmount: Number(stock.orgn_ntby_tr_pbmn),
-        fundAmount: Number(stock.fund_ntby_tr_pbmn),
+      .filter(includeStock)
+      .map((s) => ({
+        name: s.hts_kor_isnm,
+        code: s.mksc_shrn_iscd,
+        foreignQty: Number(s.frgn_ntby_qty),
+        institutionQty: Number(s.orgn_ntby_qty),
+        foreignAmount: Number(s.frgn_ntby_tr_pbmn),
+        institutionAmount: Number(s.orgn_ntby_tr_pbmn),
+        fundAmount: Number(s.fund_ntby_tr_pbmn),
         totalAmount:
-          Number(stock.frgn_ntby_tr_pbmn) + Number(stock.orgn_ntby_tr_pbmn),
+          Number(s.frgn_ntby_tr_pbmn) + Number(s.orgn_ntby_tr_pbmn),
       }))
       .sort((a, b) => b.totalAmount - a.totalAmount)
       .slice(0, 10);
