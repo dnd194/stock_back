@@ -31,12 +31,11 @@ export class MarketController {
   @Get('refined')
   async getSsangkkeuli() {
     try {
-      const raw = await this.marketService.getForeignInstitutionTotal();
-      if (!hasOutput(raw)) {
-        return createErrorResponse(getMessage(raw) ?? '데이터를 찾을 수 없습니다.');
+      const result = await this.marketService.getRefinedWithGemini();
+      if ('message' in result) {
+        return createErrorResponse(result.message);
       }
-      const refined = this.marketService.getSsangkkeuli(raw.output);
-      return createSuccessResponse(refined, '정제된 시장 데이터 조회 성공');
+      return createSuccessResponse(result, '정제된 시장 데이터 조회 성공');
     } catch (error) {
       this.logger.error('정제된 시장 데이터 조회 실패', error);
       return createErrorResponse(toErrorMessage(error));

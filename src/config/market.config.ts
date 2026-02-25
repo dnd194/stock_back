@@ -17,6 +17,10 @@ export const MARKET_CLOSE_TIME = '15:30';
 export const MARKET_SUPPLY_REDIS_KEY = (date: string, slot: string) =>
   `supply:total:${date}:${slot}`;
 
+/** Gemini 가공 응답 캐시 키 (날짜·슬롯 기준, TTL은 getTTLUntilNext0759 동일) */
+export const GEMINI_SUPPLY_REDIS_KEY = (date: string, slot: string) =>
+  `supply:gemini:${date}:${slot}`;
+
 /**
  * 캐시 만료 시각: 다음 07:59 (오늘 07:59 전이면 오늘, 지났으면 내일).
  * 장 마감 후 ~ 다음날 장 시작 전까지 마지막 집계 유지용.
