@@ -8,6 +8,18 @@ export interface InvestorStock {
   fund_ntby_tr_pbmn: string;
 }
 
+/** 정제된 수급 데이터 (refined/institution/foreign 공통 형식) */
+export interface RefinedStock {
+  name: string;
+  code: string;
+  foreignQty: number;
+  institutionQty: number;
+  foreignAmount: number;
+  institutionAmount: number;
+  fundAmount: number;
+  totalAmount: number;
+}
+
 /** KIS 외국인/기관 집계 API 성공 응답 */
 export interface ForeignInstitutionTotalSuccess {
   output: InvestorStock[];

@@ -41,6 +41,34 @@ export class MarketController {
       return createErrorResponse(toErrorMessage(error));
     }
   }
+
+  @Get('institution')
+  async getInstitution() {
+    try {
+      const result = await this.marketService.getRefinedInstitutionWithGemini();
+      if ('message' in result) {
+        return createErrorResponse(result.message);
+      }
+      return createSuccessResponse(result, '기관 순매수 조회 성공');
+    } catch (error) {
+      this.logger.error('기관 순매수 조회 실패', error);
+      return createErrorResponse(toErrorMessage(error));
+    }
+  }
+
+  @Get('foreign')
+  async getForeign() {
+    try {
+      const result = await this.marketService.getRefinedForeignWithGemini();
+      if ('message' in result) {
+        return createErrorResponse(result.message);
+      }
+      return createSuccessResponse(result, '외국인 순매수 조회 성공');
+    } catch (error) {
+      this.logger.error('외국인 순매수 조회 실패', error);
+      return createErrorResponse(toErrorMessage(error));
+    }
+  }
 }
 
 function getMessage(

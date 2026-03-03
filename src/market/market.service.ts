@@ -16,9 +16,8 @@ import {
   getTTLUntilNext0759,
 } from '../config/market.config';
 import { KisService } from '../kis/kis.service';
-import { hasOutput } from './market.types';
-import { InvestorStock } from './market.types';
-import { buildSupplyAnalysisPrompt } from './market.prompts';
+import { hasOutput, InvestorStock, RefinedStock } from './market.types';
+import { buildSupplyAnalysisPrompt, type GeminiAnalysisType } from './market.prompts';
 
 const KIS_API_PATH = '/uapi/domestic-stock/v1/quotations/foreign-institution-total';
 
@@ -30,6 +29,12 @@ const KIS_FOREIGN_INSTITUTION_PARAMS = {
   FID_RANK_SORT_CLS_CODE: '0',
   FID_ETC_CLS_CODE: '0',
 } as const;
+
+type RefinedWithGeminiResult = {
+  refined: RefinedStock[];
+  gemini: { text: string } | null;
+  geminiPending?: boolean;
+};
 
 @Injectable()
 export class MarketService {
@@ -188,18 +193,26 @@ export class MarketService {
   }
 
   /**
-   * getSsangkkeuli로 가공 후, Gemini 캐시가 있으면 함께 반환.
-   * 캐시가 없으면 refined만 즉시 반환하고, Gemini는 백그라운드에서 호출해 Redis에 저장(다음 요청부터 캐시 hit).
+   * refined 가공 후, Gemini 캐시가 있으면 함께 반환.
+   * 캐시가 없으면 refined만 즉시 반환하고, Gemini는 백그라운드에서 호출해 Redis에 저장.
    */
-  async getRefinedWithGemini(): Promise<
-    | {
-        refined: ReturnType<MarketService['getSsangkkeuli']>;
-        gemini: { text: string } | null;
-        /** true면 백그라운드에서 요약 생성 중. 잠시 후 같은 API 재호출하면 gemini가 채워짐 */
-        geminiPending?: boolean;
-      }
-    | { message: string }
-  > {
+  async getRefinedWithGemini(): Promise<RefinedWithGeminiResult | { message: string }> {
+    return this.getRefinedWithGeminiForType('ssangkkeuli');
+  }
+
+  /** 기관 순매수 + Gemini (refined와 동일한 방식) */
+  async getRefinedInstitutionWithGemini(): Promise<RefinedWithGeminiResult | { message: string }> {
+    return this.getRefinedWithGeminiForType('institution');
+  }
+
+  /** 외국인 순매수 + Gemini (refined와 동일한 방식) */
+  async getRefinedForeignWithGemini(): Promise<RefinedWithGeminiResult | { message: string }> {
+    return this.getRefinedWithGeminiForType('foreign');
+  }
+
+  private async getRefinedWithGeminiForType(
+    type: GeminiAnalysisType,
+  ): Promise<RefinedWithGeminiResult | { message: string }> {
     const raw = await this.getForeignInstitutionTotal();
     if (!hasOutput(raw)) {
       return {
@@ -207,10 +220,10 @@ export class MarketService {
       };
     }
 
-    const refined = this.getSsangkkeuli(raw.output);
+    const refined = this.getRefinedByType(raw.output, type);
     const now = dayjs();
     const { dateStr, slot } = this.getSlotAndDateForCache(now);
-    const geminiKey = GEMINI_SUPPLY_REDIS_KEY(dateStr, slot);
+    const geminiKey = GEMINI_SUPPLY_REDIS_KEY(dateStr, slot, type);
 
     const cached = await this.getCached(geminiKey);
     if (cached) {
@@ -223,20 +236,32 @@ export class MarketService {
       this.fillGeminiCacheInBackground(geminiKey, {
         apiKey: geminiConfig.apiKey,
         model: geminiConfig.model,
-      }, refined, now);
+      }, refined, now, type);
     }
 
     return { refined, gemini: null, geminiPending: !!geminiConfig?.apiKey };
+  }
+
+  private getRefinedByType(data: InvestorStock[], type: GeminiAnalysisType): RefinedStock[] {
+    switch (type) {
+      case 'ssangkkeuli':
+        return this.getSsangkkeuli(data);
+      case 'institution':
+        return this.getInstitutionNetBuy(data);
+      case 'foreign':
+        return this.getForeignNetBuy(data);
+    }
   }
 
   /** 백그라운드에서 Gemini 호출 후 Redis 저장. 응답 대기 없이 호출 */
   private fillGeminiCacheInBackground(
     geminiKey: string,
     config: { apiKey: string; model?: string },
-    refined: ReturnType<MarketService['getSsangkkeuli']>,
+    refined: RefinedStock[],
     now: dayjs.Dayjs,
+    type: GeminiAnalysisType,
   ): void {
-    this.callGemini({ apiKey: config.apiKey, model: config.model }, refined)
+    this.callGemini({ apiKey: config.apiKey, model: config.model }, refined, type)
       .then((text) => {
         const payload = { refined, gemini: { text } };
         const ttl = getTTLUntilNext0759(now);
@@ -260,11 +285,12 @@ export class MarketService {
 
   private async callGemini(
     config: { apiKey: string; model?: string },
-    refined: ReturnType<MarketService['getSsangkkeuli']>,
+    refined: RefinedStock[],
+    type: GeminiAnalysisType = 'ssangkkeuli',
   ): Promise<string> {
     const model = config.model ?? 'gemini-2.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
-    const prompt = buildSupplyAnalysisPrompt(refined);
+    const prompt = buildSupplyAnalysisPrompt(refined, type);
 
     const { data } = await axios.post<{
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
@@ -280,14 +306,26 @@ export class MarketService {
     return text;
   }
 
+  /** 공통 매핑: InvestorStock → RefinedStock */
+  private toRefinedStock(s: InvestorStock): RefinedStock {
+    return {
+      name: s.hts_kor_isnm,
+      code: s.mksc_shrn_iscd,
+      foreignQty: Number(s.frgn_ntby_qty),
+      institutionQty: Number(s.orgn_ntby_qty),
+      foreignAmount: Number(s.frgn_ntby_tr_pbmn),
+      institutionAmount: Number(s.orgn_ntby_tr_pbmn),
+      fundAmount: Number(s.fund_ntby_tr_pbmn),
+      totalAmount: Number(s.frgn_ntby_tr_pbmn) + Number(s.orgn_ntby_tr_pbmn),
+    };
+  }
+
   /**
    * 쌍끌이: 외국인·기관 순매수 종목 정제.
    * 09:30(기관 미집계)은 외국인 순매수만 있어도 포함, 10:00 이후는 둘 다 순매수만.
    */
-  getSsangkkeuli(data: InvestorStock[]) {
-    const hasInstitution = data.some(
-      (s) => Number(s.orgn_ntby_qty) !== 0,
-    );
+  getSsangkkeuli(data: InvestorStock[]): RefinedStock[] {
+    const hasInstitution = data.some((s) => Number(s.orgn_ntby_qty) !== 0);
     const includeStock = hasInstitution
       ? (s: InvestorStock) =>
           Number(s.frgn_ntby_qty) > 0 && Number(s.orgn_ntby_qty) > 0
@@ -295,18 +333,27 @@ export class MarketService {
 
     return data
       .filter(includeStock)
-      .map((s) => ({
-        name: s.hts_kor_isnm,
-        code: s.mksc_shrn_iscd,
-        foreignQty: Number(s.frgn_ntby_qty),
-        institutionQty: Number(s.orgn_ntby_qty),
-        foreignAmount: Number(s.frgn_ntby_tr_pbmn),
-        institutionAmount: Number(s.orgn_ntby_tr_pbmn),
-        fundAmount: Number(s.fund_ntby_tr_pbmn),
-        totalAmount:
-          Number(s.frgn_ntby_tr_pbmn) + Number(s.orgn_ntby_tr_pbmn),
-      }))
+      .map((s) => this.toRefinedStock(s))
       .sort((a, b) => b.totalAmount - a.totalAmount)
       .slice(0, 10);
   }
+
+  /** 기관 순매수 상위 10종목 (동일 응답 형식) */
+  getInstitutionNetBuy(data: InvestorStock[]): RefinedStock[] {
+    return data
+      .filter((s) => Number(s.orgn_ntby_qty) > 0)
+      .map((s) => this.toRefinedStock(s))
+      .sort((a, b) => b.institutionAmount - a.institutionAmount)
+      .slice(0, 10);
+  }
+
+  /** 외국인 순매수 상위 10종목 (동일 응답 형식) */
+  getForeignNetBuy(data: InvestorStock[]): RefinedStock[] {
+    return data
+      .filter((s) => Number(s.frgn_ntby_qty) > 0)
+      .map((s) => this.toRefinedStock(s))
+      .sort((a, b) => b.foreignAmount - a.foreignAmount)
+      .slice(0, 10);
+  }
+
 }
