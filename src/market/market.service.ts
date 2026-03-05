@@ -40,6 +40,12 @@ type RefinedWithGeminiResult = {
 export class MarketService {
   private readonly logger = new Logger(MarketService.name);
 
+  /** KIS API 단일 비행: 동일 cacheKey에 대한 동시 요청을 하나로 묶음 */
+  private readonly supplyFetchPromises = new Map<string, Promise<unknown>>();
+
+  /** Gemini 단일 비행: 동일 geminiKey에 대한 동시 호출을 하나로 묶음 */
+  private readonly geminiFetchPromises = new Map<string, Promise<void>>();
+
   constructor(
     private readonly kisService: KisService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
@@ -85,8 +91,27 @@ export class MarketService {
       };
     }
 
-    // API 호출 (400 시 토큰 갱신 후 1회 재시도)
-    return this.fetchAndCacheSupplyData(kisConfig, now, cacheKey, lastUpdateSlot);
+    // API 호출 (단일 비행으로 동시 요청 coalesce)
+    return this.coalesceSupplyFetch(cacheKey, () =>
+      this.fetchAndCacheSupplyData(kisConfig, now, cacheKey, lastUpdateSlot),
+    );
+  }
+
+  /** 동일 cacheKey에 대한 동시 요청을 하나로 묶어 cache stampede 방지 */
+  private async coalesceSupplyFetch<T>(
+    key: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const existing = this.supplyFetchPromises.get(key);
+    if (existing) {
+      this.logger.log(`KIS 단일 비행 대기: ${key}`);
+      return existing as Promise<T>;
+    }
+    const promise = fn().finally(() => {
+      this.supplyFetchPromises.delete(key);
+    });
+    this.supplyFetchPromises.set(key, promise);
+    return promise as Promise<T>;
   }
 
   private async resolveBeforeFirstSlot(now: dayjs.Dayjs) {
@@ -253,7 +278,7 @@ export class MarketService {
     }
   }
 
-  /** 백그라운드에서 Gemini 호출 후 Redis 저장. 응답 대기 없이 호출 */
+  /** 백그라운드에서 Gemini 호출 후 Redis 저장. 단일 비행으로 동시 호출 coalesce */
   private fillGeminiCacheInBackground(
     geminiKey: string,
     config: { apiKey: string; model?: string },
@@ -261,14 +286,26 @@ export class MarketService {
     now: dayjs.Dayjs,
     type: GeminiAnalysisType,
   ): void {
-    this.callGemini({ apiKey: config.apiKey, model: config.model }, refined, type)
+    if (this.geminiFetchPromises.has(geminiKey)) {
+      this.logger.log(`Gemini 단일 비행 대기 중: ${geminiKey}`);
+      return;
+    }
+    const promise = this.callGemini(
+      { apiKey: config.apiKey, model: config.model },
+      refined,
+      type,
+    )
       .then((text) => {
         const payload = { refined, gemini: { text } };
         const ttl = getTTLUntilNext0759(now);
         return this.redis.set(geminiKey, JSON.stringify(payload), 'EX', ttl);
       })
       .then(() => this.logger.log(`Gemini 백그라운드 저장 완료: ${geminiKey}`))
-      .catch((error) => this.logger.warn('Gemini 백그라운드 저장 실패', error));
+      .catch((error) => this.logger.warn('Gemini 백그라운드 저장 실패', error))
+      .finally(() => {
+        this.geminiFetchPromises.delete(geminiKey);
+      }) as Promise<void>;
+    this.geminiFetchPromises.set(geminiKey, promise);
   }
 
   /** 캐시 키용 날짜·슬롯 (당일 유효 슬롯 또는 전날 마지막 슬롯) */
