@@ -17,12 +17,19 @@ export const MARKET_CLOSE_TIME = '15:30';
 export const MARKET_SUPPLY_REDIS_KEY = (date: string, slot: string) =>
   `supply:total:${date}:${slot}`;
 
-/** Gemini 가공 응답 캐시 키 (날짜·슬롯 기준, TTL은 getTTLUntilNext0759 동일) */
+/** trading_data DB 저장 coalesce 키 (스탬피드 방지) */
+export const TRADING_DATA_DB_KEY = (
+  type: 'ssangkkeuli' | 'institution' | 'foreign',
+  date: string,
+  slot: string,
+) => `trading_data:${type}:${date}:${slot}`;
+
+/** Gemini 가공 응답 캐시 키 (type별 분리, TTL은 getTTLUntilNext0759 동일) */
 export const GEMINI_SUPPLY_REDIS_KEY = (
   date: string,
   slot: string,
-  type: 'ssangkkeuli' | 'institution' | 'foreign' = 'ssangkkeuli',
-) => (type === 'ssangkkeuli' ? `supply:gemini:${date}:${slot}` : `supply:gemini:${type}:${date}:${slot}`);
+  type: 'ssangkkeuli' | 'institution' | 'foreign',
+) => `supply:gemini:${type}:${date}:${slot}`;
 
 /**
  * 캐시 만료 시각: 다음 07:59 (오늘 07:59 전이면 오늘, 지났으면 내일).

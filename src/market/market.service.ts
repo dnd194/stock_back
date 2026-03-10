@@ -8,11 +8,14 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import dayjs from 'dayjs';
 import { Redis } from 'ioredis';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { SUPABASE_CLIENT } from '../supabase/supabase.constants';
 import {
   MARKET_CLOSE_TIME,
   GEMINI_SUPPLY_REDIS_KEY,
   MARKET_SUPPLY_REDIS_KEY,
   MARKET_SUPPLY_SLOTS,
+  TRADING_DATA_DB_KEY,
   getTTLUntilNext0759,
 } from '../config/market.config';
 import { KisService } from '../kis/kis.service';
@@ -46,9 +49,13 @@ export class MarketService {
   /** Gemini 단일 비행: 동일 geminiKey에 대한 동시 호출을 하나로 묶음 */
   private readonly geminiFetchPromises = new Map<string, Promise<void>>();
 
+  /** trading_data DB 저장 단일 비행: 동일 (type,date,slot)에 대한 동시 저장을 하나로 묶음 */
+  private readonly tradingDataSavePromises = new Map<string, Promise<void>>();
+
   constructor(
     private readonly kisService: KisService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
+    @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
   ) {}
 
@@ -245,9 +252,9 @@ export class MarketService {
       };
     }
 
-    const refined = this.getRefinedByType(raw.output, type);
     const now = dayjs();
     const { dateStr, slot } = this.getSlotAndDateForCache(now);
+    const refined = this.getRefinedByType(raw.output, type, dateStr, slot);
     const geminiKey = GEMINI_SUPPLY_REDIS_KEY(dateStr, slot, type);
 
     const cached = await this.getCached(geminiKey);
@@ -267,7 +274,41 @@ export class MarketService {
     return { refined, gemini: null, geminiPending: !!geminiConfig?.apiKey };
   }
 
-  private getRefinedByType(data: InvestorStock[], type: GeminiAnalysisType): RefinedStock[] {
+  private getRefinedByType(
+    data: InvestorStock[],
+    type: GeminiAnalysisType,
+    dateStr: string,
+    slot: string,
+  ): RefinedStock[] {
+    const full = this.getRefinedFullByType(data, type);
+    const dbKey = TRADING_DATA_DB_KEY(type, dateStr, slot);
+    this.coalesceTradingDataSave(dbKey, () =>
+      this.saveTradingDataToDb(full, type, dateStr, slot),
+    ).catch((err) => this.logger.warn('trading_data 저장 실패', err));
+    return full.slice(0, 10);
+  }
+
+  /** 동일 (type,date,slot)에 대한 동시 DB 저장을 하나로 묶어 스탬피드 방지 */
+  private async coalesceTradingDataSave(
+    key: string,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const existing = this.tradingDataSavePromises.get(key);
+    if (existing) {
+      this.logger.log(`trading_data 단일 비행 대기: ${key}`);
+      return existing;
+    }
+    const promise = fn().finally(() => {
+      this.tradingDataSavePromises.delete(key);
+    });
+    this.tradingDataSavePromises.set(key, promise);
+    return promise;
+  }
+
+  private getRefinedFullByType(
+    data: InvestorStock[],
+    type: GeminiAnalysisType,
+  ): RefinedStock[] {
     switch (type) {
       case 'ssangkkeuli':
         return this.getSsangkkeuli(data);
@@ -276,6 +317,45 @@ export class MarketService {
       case 'foreign':
         return this.getForeignNetBuy(data);
     }
+  }
+
+  private async saveTradingDataToDb(
+    fullData: RefinedStock[],
+    type: GeminiAnalysisType,
+    dateStr: string,
+    slot: string,
+  ): Promise<void> {
+    const { data: existing } = await this.supabase
+      .from('trading_data')
+      .select('id')
+      .eq('type', type)
+      .eq('date', dateStr)
+      .eq('slot', slot)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      this.logger.log(`trading_data 이미 존재, 스킵: ${type} ${dateStr} ${slot}`);
+      return;
+    }
+
+    const rows = fullData.map((s, idx) => ({
+      type,
+      date: dateStr,
+      slot,
+      rank: idx + 1,
+      name: s.name,
+      code: s.code,
+      foreign_qty: s.foreignQty,
+      institution_qty: s.institutionQty,
+      foreign_amount: s.foreignAmount,
+      institution_amount: s.institutionAmount,
+      fund_amount: s.fundAmount,
+      total_amount: s.totalAmount,
+    }));
+
+    const { error } = await this.supabase.from('trading_data').insert(rows);
+    if (error) throw error;
+    this.logger.log(`trading_data 저장: ${type} ${dateStr} ${slot} (${rows.length}건)`);
   }
 
   /** 백그라운드에서 Gemini 호출 후 Redis 저장. 단일 비행으로 동시 호출 coalesce */
@@ -323,8 +403,9 @@ export class MarketService {
   private async callGemini(
     config: { apiKey: string; model?: string },
     refined: RefinedStock[],
-    type: GeminiAnalysisType = 'ssangkkeuli',
+    type: GeminiAnalysisType,
   ): Promise<string> {
+    this.logger.log(`Gemini 호출: type=${type}, 종목수=${refined.length}`);
     const model = config.model ?? 'gemini-2.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
     const prompt = buildSupplyAnalysisPrompt(refined, type);
@@ -371,26 +452,23 @@ export class MarketService {
     return data
       .filter(includeStock)
       .map((s) => this.toRefinedStock(s))
-      .sort((a, b) => b.totalAmount - a.totalAmount)
-      .slice(0, 10);
+      .sort((a, b) => b.totalAmount - a.totalAmount);
   }
 
-  /** 기관 순매수 상위 10종목 (동일 응답 형식) */
+  /** 기관 순매수 (slice는 getRefinedByType에서 처리) */
   getInstitutionNetBuy(data: InvestorStock[]): RefinedStock[] {
     return data
       .filter((s) => Number(s.orgn_ntby_qty) > 0)
       .map((s) => this.toRefinedStock(s))
-      .sort((a, b) => b.institutionAmount - a.institutionAmount)
-      .slice(0, 10);
+      .sort((a, b) => b.institutionAmount - a.institutionAmount);
   }
 
-  /** 외국인 순매수 상위 10종목 (동일 응답 형식) */
+  /** 외국인 순매수 (slice는 getRefinedByType에서 처리) */
   getForeignNetBuy(data: InvestorStock[]): RefinedStock[] {
     return data
       .filter((s) => Number(s.frgn_ntby_qty) > 0)
       .map((s) => this.toRefinedStock(s))
-      .sort((a, b) => b.foreignAmount - a.foreignAmount)
-      .slice(0, 10);
+      .sort((a, b) => b.foreignAmount - a.foreignAmount);
   }
 
 }

@@ -30,6 +30,7 @@ export class MarketController {
 
   @Get('refined')
   async getSsangkkeuli() {
+    this.logger.log('GET /market/refined (ssangkkeuli)');
     try {
       const result = await this.marketService.getRefinedWithGemini();
       if ('message' in result) {
@@ -44,6 +45,7 @@ export class MarketController {
 
   @Get('institution')
   async getInstitution() {
+    this.logger.log('GET /market/institution');
     try {
       const result = await this.marketService.getRefinedInstitutionWithGemini();
       if ('message' in result) {
@@ -58,6 +60,7 @@ export class MarketController {
 
   @Get('foreign')
   async getForeign() {
+    this.logger.log('GET /market/foreign');
     try {
       const result = await this.marketService.getRefinedForeignWithGemini();
       if ('message' in result) {

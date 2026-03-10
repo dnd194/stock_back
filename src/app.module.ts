@@ -7,6 +7,8 @@ import kisConfig from './config/kis.config';
 import appConfig from './config/app.config';
 import redisConfig from './config/redis.config';
 import geminiConfig from './config/gemini.config';
+import supabaseConfig from './config/supabase.config';
+import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
   imports: [
@@ -15,7 +17,9 @@ import geminiConfig from './config/gemini.config';
     ConfigModule.forFeature(appConfig),
     ConfigModule.forFeature(redisConfig),
     ConfigModule.forFeature(geminiConfig),
+    ConfigModule.forFeature(supabaseConfig),
     RedisModule,
+    SupabaseModule,
     KisModule,
     MarketModule,
   ],
