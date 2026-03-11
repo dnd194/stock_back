@@ -12,21 +12,20 @@ export class BatchService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
   ) {}
 
-  /** 월~금 23:55에 실행: 당일 14시 이전에 저장된 trading_data 삭제 */
+  /** 월~금 23:55에 실행: 당일 date 중 slot이 14:30이 아닌 trading_data 삭제 */
   @Cron('55 23 * * 1-5', {
     timeZone: 'Asia/Seoul',
   })
   async cleanupTradingDataBefore14(): Promise<void> {
     this.logger.log('trading_data 정리 배치 시작');
 
-    const today = dayjs();
-    const cutoff = today.hour(14).minute(0).second(0).millisecond(0);
-    const cutoffIso = cutoff.toISOString();
+    const todayStr = dayjs().format('YYYY-MM-DD');
 
     const { data, error } = await this.supabase
       .from('trading_data')
       .delete()
-      .lt('created_at', cutoffIso)
+      .eq('date', todayStr)
+      .neq('slot', '14:30')
       .select('id');
 
     if (error) {
@@ -36,7 +35,7 @@ export class BatchService {
 
     const deletedCount = data?.length ?? 0;
     this.logger.log(
-      `trading_data 정리 완료: ${cutoff.format('YYYY-MM-DD HH:mm')} 이전 ${deletedCount}건 삭제`,
+      `trading_data 정리 완료: 당일(${todayStr}) slot≠14:30 ${deletedCount}건 삭제`,
     );
   }
 }
