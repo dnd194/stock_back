@@ -39,17 +39,17 @@ export const GEMINI_FOREIGN_ANALYSIS_PROMPT = `아래는 오늘 외국인 순매
 ${ANALYSIS_RULES}
 `;
 
-export type GeminiAnalysisType = 'ssangkkeuli' | 'institution' | 'foreign';
+export type GeminiAnalysisType = 'total' | 'institution' | 'foreign';
 
 const PROMPT_BY_TYPE: Record<GeminiAnalysisType, string> = {
-  ssangkkeuli: GEMINI_SUPPLY_ANALYSIS_PROMPT,
+  total: GEMINI_SUPPLY_ANALYSIS_PROMPT,
   institution: GEMINI_INSTITUTION_ANALYSIS_PROMPT,
   foreign: GEMINI_FOREIGN_ANALYSIS_PROMPT,
 };
 
 export function buildSupplyAnalysisPrompt(
   refinedData: unknown,
-  type: GeminiAnalysisType = 'ssangkkeuli',
+  type: GeminiAnalysisType = 'total',
 ): string {
   return PROMPT_BY_TYPE[type] + '\n\n[제공 데이터]\n' + JSON.stringify(refinedData, null, 2);
 }

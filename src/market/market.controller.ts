@@ -28,9 +28,9 @@ export class MarketController {
     }
   }
 
-  @Get('refined')
+  @Get('total')
   async getSsangkkeuli() {
-    this.logger.log('GET /market/refined (ssangkkeuli)');
+    this.logger.log('GET /market/total');
     try {
       const result = await this.marketService.getRefinedWithGemini();
       if ('message' in result) {

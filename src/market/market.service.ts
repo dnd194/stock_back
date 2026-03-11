@@ -18,6 +18,7 @@ import {
   TRADING_DATA_DB_KEY,
   getTTLUntilNext0759,
 } from '../config/market.config';
+import { getSlotAndDateForCache } from '../common/utils/market-slot.utils';
 import { KisService } from '../kis/kis.service';
 import { hasOutput, InvestorStock, RefinedStock } from './market.types';
 import { buildSupplyAnalysisPrompt, type GeminiAnalysisType } from './market.prompts';
@@ -229,7 +230,7 @@ export class MarketService {
    * 캐시가 없으면 refined만 즉시 반환하고, Gemini는 백그라운드에서 호출해 Redis에 저장.
    */
   async getRefinedWithGemini(): Promise<RefinedWithGeminiResult | { message: string }> {
-    return this.getRefinedWithGeminiForType('ssangkkeuli');
+    return this.getRefinedWithGeminiForType('total');
   }
 
   /** 기관 순매수 + Gemini (refined와 동일한 방식) */
@@ -253,7 +254,7 @@ export class MarketService {
     }
 
     const now = dayjs();
-    const { dateStr, slot } = this.getSlotAndDateForCache(now);
+    const { dateStr, slot } = getSlotAndDateForCache(now);
     const refined = this.getRefinedByType(raw.output, type, dateStr, slot);
     const geminiKey = GEMINI_SUPPLY_REDIS_KEY(dateStr, slot, type);
 
@@ -310,7 +311,7 @@ export class MarketService {
     type: GeminiAnalysisType,
   ): RefinedStock[] {
     switch (type) {
-      case 'ssangkkeuli':
+      case 'total':
         return this.getSsangkkeuli(data);
       case 'institution':
         return this.getInstitutionNetBuy(data);
@@ -386,18 +387,6 @@ export class MarketService {
         this.geminiFetchPromises.delete(geminiKey);
       }) as Promise<void>;
     this.geminiFetchPromises.set(geminiKey, promise);
-  }
-
-  /** 캐시 키용 날짜·슬롯 (당일 유효 슬롯 또는 전날 마지막 슬롯) */
-  private getSlotAndDateForCache(now: dayjs.Dayjs): { dateStr: string; slot: string } {
-    const currentTime = now.format('HH:mm');
-    const lastSlot = MARKET_SUPPLY_SLOTS.filter((time) => currentTime >= time).pop();
-    if (lastSlot) {
-      return { dateStr: now.format('YYYYMMDD'), slot: lastSlot };
-    }
-    const yesterday = now.subtract(1, 'day');
-    const lastSlotOfDay = MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1];
-    return { dateStr: yesterday.format('YYYYMMDD'), slot: lastSlotOfDay };
   }
 
   private async callGemini(

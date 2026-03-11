@@ -17,9 +17,12 @@ export const MARKET_CLOSE_TIME = '15:30';
 export const MARKET_SUPPLY_REDIS_KEY = (date: string, slot: string) =>
   `supply:total:${date}:${slot}`;
 
+/** trading_data DB type (Supabase CHECK 제약과 일치) */
+export type TradingDataType = 'total' | 'institution' | 'foreign';
+
 /** trading_data DB 저장 coalesce 키 (스탬피드 방지) */
 export const TRADING_DATA_DB_KEY = (
-  type: 'ssangkkeuli' | 'institution' | 'foreign',
+  type: TradingDataType,
   date: string,
   slot: string,
 ) => `trading_data:${type}:${date}:${slot}`;
@@ -28,7 +31,7 @@ export const TRADING_DATA_DB_KEY = (
 export const GEMINI_SUPPLY_REDIS_KEY = (
   date: string,
   slot: string,
-  type: 'ssangkkeuli' | 'institution' | 'foreign',
+  type: TradingDataType,
 ) => `supply:gemini:${type}:${date}:${slot}`;
 
 /**
