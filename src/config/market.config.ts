@@ -8,6 +8,18 @@ export const MARKET_SUPPLY_SLOTS = [
   '14:30',
 ] as const;
 
+/**
+ * 순매도 배치 보충 실행 시간 (월~금)
+ * 해당 슬롯 데이터가 DB에 없을 때만 API 호출 후 저장
+ */
+export const SUPPLY_SELL_FALLBACK_RUN_AT = [
+  { runAt: '09:40', slot: '09:30' },
+  { runAt: '10:10', slot: '10:00' },
+  { runAt: '11:30', slot: '11:20' },
+  { runAt: '13:20', slot: '13:20' },
+  { runAt: '14:40', slot: '14:30' },
+] as const;
+
 /** 기관 첫 집계 시각. 09:30에는 orgn_ntby_qty가 0이라 외국인만 필터 */
 export const INSTITUTION_FIRST_SLOT = '10:00';
 
