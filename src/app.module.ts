@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BatchModule } from './batch/batch.module';
 import { RankModule } from './rank/rank.module';
+import { SellModule } from './sell/sell.module';
 import { RedisModule } from './redis/redis.module';
 import { KisModule } from './kis/kis.module';
 import { MarketModule } from './market/market.module';
@@ -26,6 +27,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     SupabaseModule,
     BatchModule,
     RankModule,
+    SellModule,
     KisModule,
     MarketModule,
   ],
