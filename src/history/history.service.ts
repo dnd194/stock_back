@@ -1,10 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
+import dayjs from 'dayjs';
 import { SUPABASE_CLIENT } from '../supabase/supabase.constants';
+import { getSlotAndDateForCache } from '../common/utils/market-slot.utils';
 import { RefinedStock, BuyHistoryType } from './history.types';
-import { MARKET_SUPPLY_SLOTS } from '../config/market.config';
-
-const LAST_SLOT = MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1]; // '14:30'
 
 type HistoryResult =
   | { refined: RefinedStock[] }
@@ -44,12 +43,14 @@ export class HistoryService {
       return { message: '날짜 형식이 올바르지 않습니다. (YYYY-MM-DD 또는 YYYYMMDD)' };
     }
 
+    const { slot } = getSlotAndDateForCache(dayjs());
+
     const { data, error } = await this.supabase
       .from('trading_data')
       .select('name, code, foreign_qty, institution_qty, foreign_amount, institution_amount, fund_amount, total_amount, rank')
       .eq('type', type)
       .eq('date', dateStr)
-      .eq('slot', LAST_SLOT)
+      .eq('slot', slot)
       .order('rank', { ascending: true });
 
     if (error) {
@@ -58,7 +59,7 @@ export class HistoryService {
     }
 
     if (!data || data.length === 0) {
-      this.logger.log(`trading_data 없음: ${type} ${dateStr} ${LAST_SLOT}`);
+      this.logger.log(`trading_data 없음: ${type} ${dateStr} ${slot}`);
       return { message: '해당 시점의 데이터가 없습니다.' };
     }
 
