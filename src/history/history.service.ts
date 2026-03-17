@@ -3,7 +3,10 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import dayjs from 'dayjs';
 import { SUPABASE_CLIENT } from '../supabase/supabase.constants';
 import { getSlotAndDateForCache } from '../common/utils/market-slot.utils';
+import { MARKET_SUPPLY_SLOTS } from '../config/market.config';
 import { RefinedStock, BuyHistoryType } from './history.types';
+
+const LAST_SLOT = MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1]; // '14:30'
 
 type HistoryResult =
   | { refined: RefinedStock[] }
@@ -43,7 +46,11 @@ export class HistoryService {
       return { message: '날짜 형식이 올바르지 않습니다. (YYYY-MM-DD 또는 YYYYMMDD)' };
     }
 
-    const { slot } = getSlotAndDateForCache(dayjs());
+    const todayStr = dayjs().format('YYYYMMDD');
+    const slot =
+      dateStr === todayStr
+        ? getSlotAndDateForCache(dayjs()).slot
+        : LAST_SLOT;
 
     const { data, error } = await this.supabase
       .from('trading_data')
