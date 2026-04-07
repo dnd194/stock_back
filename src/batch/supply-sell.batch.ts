@@ -60,7 +60,7 @@ export class SupplySellBatch {
     await this.runPrimary('14:30');
   }
 
-  /** 보충: DB에 데이터 없을 때만 실행 (09:40, 10:10, 11:30, 13:20, 14:40) */
+  /** 보충: DB에 데이터 없을 때만 실행 (09:40, 10:10, 11:30, 13:30, 14:40) */
   @Cron('40 9 * * 1-5', { timeZone: 'Asia/Seoul' })
   async fallback0940(): Promise<void> {
     await this.runFallback('09:30');
@@ -76,7 +76,7 @@ export class SupplySellBatch {
     await this.runFallback('11:20');
   }
 
-  @Cron('20 13 * * 1-5', { timeZone: 'Asia/Seoul' })
+  @Cron('30 13 * * 1-5', { timeZone: 'Asia/Seoul' })
   async fallback1320(): Promise<void> {
     await this.runFallback('13:20');
   }
