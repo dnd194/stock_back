@@ -18,6 +18,10 @@ export interface RefinedStock {
   institutionAmount: number;
   fundAmount: number;
   totalAmount: number;
+  /** 일별 14:30 스냅샷 기준, 최근 lookback 구간에서 순매수 순위에 잡힌 서로 다른 일수 */
+  netBuyDaysInWindow?: number;
+  /** 같은 구간에서 DB 최신 스냅샷일부터 역으로 이어진 연속 순매수 일수 */
+  netBuyConsecutiveDays?: number;
 }
 
 /** KIS 외국인/기관 집계 API 성공 응답 */

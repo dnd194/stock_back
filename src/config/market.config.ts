@@ -20,6 +20,13 @@ export const SUPPLY_SELL_FALLBACK_RUN_AT = [
   { runAt: '14:40', slot: '14:30' },
 ] as const;
 
+/** 일별 마감 집계 슬롯 (연속 순매수 등 DB 일별 분석용) */
+export const MARKET_DAILY_CLOSE_SLOT =
+  MARKET_SUPPLY_SLOTS[MARKET_SUPPLY_SLOTS.length - 1];
+
+/** 연속 순매수 분석: 당일 포함 과거 캘린더 일수 */
+export const NET_BUY_STREAK_LOOKBACK_DAYS = 7;
+
 /** 기관 첫 집계 시각. 09:30에는 orgn_ntby_qty가 0이라 외국인만 필터 */
 export const INSTITUTION_FIRST_SLOT = '10:00';
 

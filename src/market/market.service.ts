@@ -13,8 +13,10 @@ import { SUPABASE_CLIENT } from '../supabase/supabase.constants';
 import {
   MARKET_CLOSE_TIME,
   GEMINI_SUPPLY_REDIS_KEY,
+  MARKET_DAILY_CLOSE_SLOT,
   MARKET_SUPPLY_REDIS_KEY,
   MARKET_SUPPLY_SLOTS,
+  NET_BUY_STREAK_LOOKBACK_DAYS,
   TRADING_DATA_DB_KEY,
   getTTLUntilNext0759,
 } from '../config/market.config';
@@ -59,6 +61,97 @@ export class MarketService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * 응답 종목 코드별: (1) lookback 구간 14:30 스냅샷에서 순매수 순위에 잡힌 서로 다른 일수,
+   * (2) 전체 DB 기준 최신 스냅샷일부터 역으로 이어진 연속 일수.
+   */
+  private async fetchNetBuyStatsForCodes(
+    type: GeminiAnalysisType,
+    codes: string[],
+  ): Promise<Map<string, { netBuyDaysInWindow: number; netBuyConsecutiveDays: number }>> {
+    if (codes.length === 0) {
+      return new Map();
+    }
+
+    const toDate = dayjs().format('YYYYMMDD');
+    const fromDate = dayjs()
+      .subtract(NET_BUY_STREAK_LOOKBACK_DAYS, 'day')
+      .format('YYYYMMDD');
+
+    const { data: rows, error } = await this.supabase
+      .from('trading_data')
+      .select('code, date')
+      .eq('type', type)
+      .eq('slot', MARKET_DAILY_CLOSE_SLOT)
+      .gte('date', fromDate)
+      .lte('date', toDate);
+
+    const result = new Map<
+      string,
+      { netBuyDaysInWindow: number; netBuyConsecutiveDays: number }
+    >();
+
+    if (error) {
+      this.logger.error(`순매수 통계 조회 실패 (${type})`, error);
+      for (const c of codes) {
+        result.set(c, { netBuyDaysInWindow: 0, netBuyConsecutiveDays: 0 });
+      }
+      return result;
+    }
+
+    if (!rows?.length) {
+      for (const c of codes) {
+        result.set(c, { netBuyDaysInWindow: 0, netBuyConsecutiveDays: 0 });
+      }
+      return result;
+    }
+
+    const uniqueDatesDesc = [
+      ...new Set(rows.map((r) => String(r.date))),
+    ].sort((a, b) => b.localeCompare(a));
+
+    const byCode = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const code = String(r.code);
+      const d = String(r.date);
+      if (!byCode.has(code)) byCode.set(code, new Set());
+      byCode.get(code)!.add(d);
+    }
+
+    for (const code of codes) {
+      const dateSet = byCode.get(code) ?? new Set<string>();
+      const netBuyDaysInWindow = dateSet.size;
+
+      let netBuyConsecutiveDays = 0;
+      for (const d of uniqueDatesDesc) {
+        if (dateSet.has(d)) netBuyConsecutiveDays += 1;
+        else break;
+      }
+
+      result.set(code, { netBuyDaysInWindow, netBuyConsecutiveDays });
+    }
+
+    return result;
+  }
+
+  private async mergeNetBuyStatsIntoRefined(
+    type: GeminiAnalysisType,
+    refined: RefinedStock[],
+  ): Promise<RefinedStock[]> {
+    const stats = await this.fetchNetBuyStatsForCodes(
+      type,
+      refined.map((r) => r.code),
+    );
+    return refined.map((r) => {
+      const s = stats.get(r.code);
+      return {
+        ...r,
+        netBuyDaysInWindow: s?.netBuyDaysInWindow ?? 0,
+        netBuyConsecutiveDays: s?.netBuyConsecutiveDays ?? 0,
+      };
+    });
+  }
 
   async getForeignInstitutionTotal() {
     this.logger.log('getForeignInstitutionTotal() 호출');
@@ -255,13 +348,16 @@ export class MarketService {
 
     const now = dayjs();
     const { dateStr, slot } = getSlotAndDateForCache(now);
-    const refined = this.getRefinedByType(raw.output, type, dateStr, slot);
+    const refinedBase = this.getRefinedByType(raw.output, type, dateStr, slot);
+    const refined = await this.mergeNetBuyStatsIntoRefined(type, refinedBase);
     const geminiKey = GEMINI_SUPPLY_REDIS_KEY(dateStr, slot, type);
 
     const cached = await this.getCached(geminiKey);
     if (cached) {
       this.logger.log(`Gemini 캐시 사용: ${geminiKey}`);
-      return JSON.parse(cached);
+      const parsed = JSON.parse(cached) as RefinedWithGeminiResult;
+      parsed.refined = await this.mergeNetBuyStatsIntoRefined(type, parsed.refined);
+      return parsed;
     }
 
     const geminiConfig = this.configService.get<{ apiKey?: string; model?: string }>('gemini');
