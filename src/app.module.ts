@@ -13,14 +13,17 @@ import appConfig from './config/app.config';
 import redisConfig from './config/redis.config';
 import geminiConfig from './config/gemini.config';
 import supabaseConfig from './config/supabase.config';
+import { resolveEnableCronBatch } from './config/cron-batch.util';
 import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
   imports: [
-    ScheduleModule.forRoot(),
     ConfigModule.forRoot({ isGlobal: true }),
-    ConfigModule.forFeature(kisConfig),
     ConfigModule.forFeature(appConfig),
+    ScheduleModule.forRootAsync({
+      useFactory: () => ({ cronJobs: resolveEnableCronBatch() }),
+    }),
+    ConfigModule.forFeature(kisConfig),
     ConfigModule.forFeature(redisConfig),
     ConfigModule.forFeature(geminiConfig),
     ConfigModule.forFeature(supabaseConfig),
