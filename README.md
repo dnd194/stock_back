@@ -3,7 +3,6 @@
 > 한국투자증권 Open API의 외국인·기관 수급 데이터를 수집·가공하고,  
 > 외국인과 기관의 동시 순매수(쌍끌이) 종목을 한눈에 확인할 수 있도록 만든 주식 수급 분석 서비스입니다.
 
-**개인 프로젝트 · Full-stack Web Service**
 
 현재는 배포 환경 이유로 실서비스 운영을 중단한 상태입니다.  
 대신 소스코드를 통해 주요 기능과 기술 구현 내용을 확인할 수 있도록 정리했습니다.
@@ -70,21 +69,22 @@
 
 ### 메인 - 쌍끌이 Top 10
 
-![쌍끌이 메인 화면](./docs/images/main.png)
+![쌍끌이 메인 화면1](./docs/images/main1.png)
+![쌍끌이 메인 화면2](./docs/images/main2.png)
+![쌍끌이 모바일 메인 화면](./docs/images/mobileMain1.png)
 
 ### 외국인 / 기관 수급
 
-![수급 데이터 화면](./docs/images/supply.png)
+![수급 데이터 외국인 화면](./docs/images/foreign.png)
+![수급 데이터 기관 화면](./docs/images/ins.png)
 
 ### 날짜별 조회
 
-![날짜별 조회 화면](./docs/images/history.png)
+![날짜별 조회 화면](./docs/images/ds.png)
 
 ### AI 수급 분석
 
-![AI 분석 화면](./docs/images/ai-analysis.png)
-
-> 실제 이미지 파일이 없는 경우 위 경로에 캡처 이미지를 추가하면 됩니다.
+![AI 분석 화면](./docs/images/ai.png)
 
 ---
 
